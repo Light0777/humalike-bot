@@ -304,13 +304,9 @@ export function useVoiceRoom(
 
     const unsub = signaling.subscribe(roomCode, userId, handleMessage)
 
-    // Small delay to ensure subscription is active, then announce join
-    const timer = setTimeout(() => {
-      signaling.announceJoin(userId, username)
-    }, 500)
+    signaling.announceJoin(userId, username)
 
     return () => {
-      clearTimeout(timer)
       signaling.announceLeave(userId)
       unsub()
 

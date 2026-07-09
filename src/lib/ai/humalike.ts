@@ -64,8 +64,8 @@ export async function getHumalikeDecision(
       confidence: decision.confidence ?? 0.5,
       reasoning: decision.reasoning ?? "",
     }
-  } catch (error) {
-    console.warn("Humalike API unavailable, using default decision:", error)
+  } catch {
+    console.warn("Humalike API unavailable, using default decision")
     return getDefaultDecision(input)
   }
 }
@@ -73,9 +73,24 @@ export async function getHumalikeDecision(
 function getDefaultDecision(
   input: HumalikeRequest
 ): HumalikeDecision {
-  // Default behavior: speak occasionally if conversation is active
-  const shouldSpeak =
-    input.speakerCount > 2 && Math.random() < 0.3
+  const lines = input.transcript.split("\n").filter(Boolean)
+  const lastLine = lines.at(-1) ?? ""
+  const lastContent = lastLine.replace(/^[^:]+:\s*/, "")
+
+  const isQuestion =
+    /\?\s*$/.test(lastContent) ||
+    /^(can|could|will|would|do|does|is|are|what|why|how|tell|give)\b/i.test(lastContent)
+
+  let shouldSpeak: boolean
+  if (input.speakerCount === 0) {
+    shouldSpeak = false
+  } else if (isQuestion) {
+    shouldSpeak = true
+  } else if (input.speakerCount >= 3) {
+    shouldSpeak = Math.random() < 0.4
+  } else {
+    shouldSpeak = Math.random() < 0.3
+  }
 
   return {
     shouldSpeak,

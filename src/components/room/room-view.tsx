@@ -9,7 +9,8 @@ import { AIStatus } from "@/components/room/ai-status"
 import { VoiceControls } from "@/components/room/voice-controls"
 import { AudioIndicator } from "@/components/room/audio-indicator"
 import { useVoiceRoom } from "@/lib/voice/useVoiceRoom"
-import { useAIChat } from "@/lib/ai/useAIChat"
+import { useAIChat, type AIChatDebug } from "@/lib/ai/useAIChat"
+import { AIDebug } from "@/components/room/ai-debug"
 import { getUserId, storeUsername } from "@/lib/utils/session"
 import type { Participant, AIStatus as AIStatusType } from "@/lib/types"
 
@@ -28,14 +29,18 @@ export function RoomView({ roomId, username }: RoomViewProps) {
   const [aiEnabled, setAiEnabled] = useState(false)
   const [aiStatus, setAiStatus] = useState<AIStatusType>("idle")
   const [aiLoading, setAiLoading] = useState(false)
+  const [aiDebug, setAiDebug] = useState<AIChatDebug | null>(null)
   const [connected, setConnected] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
   const userId = getUserId()
 
-  const { peers, voiceState, localStream, toggleMic, toggleSpeaker } =
-    useVoiceRoom(roomCode || "loading", userId, username)
+  const { peers, voiceState, toggleMic, toggleSpeaker } = useVoiceRoom(
+    roomCode || "loading",
+    userId,
+    username
+  )
 
   const aiParticipant = participants.find((p) => p.is_ai) ?? null
 
@@ -43,9 +48,9 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     roomId: backendRoomId || null,
     aiParticipantId: aiParticipant?.id ?? null,
     aiName: "AI",
-    localStream,
     aiEnabled,
     onStatusChange: setAiStatus,
+    onDebug: setAiDebug,
   })
 
   useEffect(() => {
@@ -299,12 +304,15 @@ export function RoomView({ roomId, username }: RoomViewProps) {
       </Card>
 
       {aiEnabled && (
-        <Card variant="soft" className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-[#171717]" />
-            <span className="text-sm text-[#4d4d4d]">AI Participant</span>
+        <Card variant="soft" className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-[#171717]" />
+              <span className="text-sm text-[#4d4d4d]">AI Participant</span>
+            </div>
+            <AIStatus status={aiStatus} />
           </div>
-          <AIStatus status={aiStatus} />
+          {aiDebug && <AIDebug debug={aiDebug} />}
         </Card>
       )}
 

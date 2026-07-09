@@ -27,6 +27,7 @@ export class AudioCapture {
   private audioContext: AudioContext | null = null
   private animationFrame: number = 0
   private cooldownTimer: ReturnType<typeof setTimeout> | null = null
+  private sttFailed = false
 
   constructor(options: AudioCaptureOptions) {
     this.options = options
@@ -111,6 +112,8 @@ export class AudioCapture {
   }
 
   private async transcribe(blob: Blob) {
+    if (this.sttFailed) return
+
     try {
       const formData = new FormData()
       formData.append("audio", blob, "audio.webm")
@@ -130,7 +133,7 @@ export class AudioCapture {
         this.options.onTranscription(text, this.options.userId)
       }
     } catch {
-      // transcription failed silently
+      this.sttFailed = true
     }
   }
 

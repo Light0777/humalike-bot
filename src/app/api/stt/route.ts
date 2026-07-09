@@ -30,8 +30,6 @@ export async function POST(request: NextRequest) {
     })
 
     if (!response.ok) {
-      const error = await response.text()
-      console.error("STT service error:", error)
       return NextResponse.json(
         { error: "Transcription failed" },
         { status: 502 }
@@ -40,8 +38,7 @@ export async function POST(request: NextRequest) {
 
     const result = await response.json()
     return NextResponse.json(result)
-  } catch (error) {
-    console.error("STT proxy error:", error)
+  } catch {
     return NextResponse.json(
       { error: "Transcription service unavailable" },
       { status: 503 }

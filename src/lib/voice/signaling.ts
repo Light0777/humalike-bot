@@ -4,6 +4,8 @@ import type { SignalingMessage } from "./types"
 
 export class SignalingService {
   private channel: RealtimeChannel | null = null
+  private ready = false
+  private pending: SignalingMessage[] = []
 
   subscribe(
     roomCode: string,
@@ -24,46 +26,64 @@ export class SignalingService {
       }
     )
 
-    this.channel.subscribe()
+    this.channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        this.ready = true
+        for (const msg of this.pending) {
+          this.doSend(msg)
+        }
+        this.pending = []
+      }
+    })
 
     return () => {
       this.channel?.unsubscribe()
       this.channel = null
+      this.ready = false
+      this.pending = []
     }
   }
 
-  async send(message: SignalingMessage) {
+  private doSend(message: SignalingMessage) {
     if (!this.channel) return
-    await this.channel.send({
+    this.channel.send({
       type: "broadcast",
       event: "signal",
       payload: message,
     })
   }
 
-  async announceJoin(userId: string, username: string) {
-    await this.send({
+  private send(message: SignalingMessage) {
+    if (this.ready) {
+      this.doSend(message)
+    } else {
+      this.pending.push(message)
+    }
+  }
+
+  announceJoin(userId: string, username: string) {
+    this.send({
       type: "join",
       senderId: userId,
       senderUsername: username,
     })
   }
 
-  async announceLeave(userId: string) {
-    await this.send({
+  announceLeave(userId: string) {
+    this.send({
       type: "leave",
       senderId: userId,
       senderUsername: "",
     })
   }
 
-  async sendOffer(
+  sendOffer(
     senderId: string,
     senderUsername: string,
     targetId: string,
     sdp: RTCSessionDescriptionInit
   ) {
-    await this.send({
+    this.send({
       type: "offer",
       senderId,
       senderUsername,
@@ -72,13 +92,13 @@ export class SignalingService {
     })
   }
 
-  async sendAnswer(
+  sendAnswer(
     senderId: string,
     senderUsername: string,
     targetId: string,
     sdp: RTCSessionDescriptionInit
   ) {
-    await this.send({
+    this.send({
       type: "answer",
       senderId,
       senderUsername,
@@ -87,12 +107,12 @@ export class SignalingService {
     })
   }
 
-  async sendIceCandidate(
+  sendIceCandidate(
     senderId: string,
     targetId: string,
     candidate: RTCIceCandidateInit
   ) {
-    await this.send({
+    this.send({
       type: "ice-candidate",
       senderId,
       senderUsername: "",

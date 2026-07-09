@@ -101,6 +101,7 @@ function buildSystemPrompt(input: ResponseInput): string {
       ? `\n\nRelationships:\n${relationshipContext}`
       : "") +
     `\n\nRules:` +
+    `\n- Respond directly to what was just said. Stay on topic.` +
     `\n- Speak naturally, like a human, not a chatbot.` +
     `\n- Keep responses concise (1-3 sentences).` +
     `\n- Reference past conversations if relevant.` +
@@ -114,7 +115,7 @@ function buildUserPrompt(input: ResponseInput): string {
   return `Recent conversation:\n${input.transcript}\n\nRespond naturally as ${input.aiName}:`
 }
 
-function getFallbackResponse(input: ResponseInput): string {
+function getFallbackResponse(_input: ResponseInput): string {
   const responses = [
     "Hmm, that's interesting.",
     "Yeah, I see what you mean.",
