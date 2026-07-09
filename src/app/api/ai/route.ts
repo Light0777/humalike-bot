@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { addAIToRoom, removeAIFromRoom } from "@/lib/ai/ai-service"
+import { openThread } from "@/lib/ai/humalike-turn-taking"
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,6 +16,9 @@ export async function POST(request: NextRequest) {
 
     if (action === "add") {
       const ai = await addAIToRoom(room_id)
+      await openThread(room_id).catch((e) =>
+        console.error("Failed to open Humalike thread:", e)
+      )
       return NextResponse.json(ai)
     }
 

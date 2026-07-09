@@ -14,6 +14,7 @@ export interface AIChatDebug {
 
 interface UseAIChatOptions {
   roomId: string | null
+  localParticipantId: string | null
   aiParticipantId: string | null
   aiName: string
   aiEnabled: boolean
@@ -103,6 +104,7 @@ async function speakResponse(text: string): Promise<void> {
 
 export function useAIChat({
   roomId,
+  localParticipantId,
   aiParticipantId,
   aiName,
   aiEnabled,
@@ -116,6 +118,7 @@ export function useAIChat({
   const isRespondingRef = useRef(false)
   const isRunningRef = useRef(false)
   const aiEnabledRef = useRef(aiEnabled)
+  const cleanupRef = useRef(false)
 
   const debugRef = useRef<AIChatDebug>({
     sttAvailable: !!SpeechRecognitionAPI,
@@ -171,6 +174,7 @@ export function useAIChat({
             : `Silent: ${decision.reason || "no reason"}`,
           responseCount:
             debugRef.current.responseCount + (decision.should_respond ? 1 : 0),
+          lastError: decision.llmError || debugRef.current.lastError,
         })
 
         if (!decision.should_respond) {
@@ -204,35 +208,28 @@ export function useAIChat({
         lastTranscript: trimmed,
       })
 
-      try {
-        await fetch("/api/conversations", {
+      Promise.all([
+        fetch("/api/conversations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             room_id: roomId,
-            participant_id: aiParticipantId,
+            participant_id: localParticipantId || aiParticipantId,
             participant_username: "",
             content: trimmed,
           }),
-        })
-      } catch {
-        // ignore
-      }
-
-      try {
-        await fetch("/api/memory", {
+        }).catch(() => {}),
+        fetch("/api/memory", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "user_spoke",
-            participant_id: aiParticipantId,
-            speaker_id: aiParticipantId,
+            participant_id: localParticipantId || aiParticipantId,
+            speaker_id: localParticipantId || aiParticipantId,
             content: trimmed,
           }),
-        })
-      } catch {
-        // ignore
-      }
+        }).catch(() => {}),
+      ])
 
       if (respondTimerRef.current) {
         clearTimeout(respondTimerRef.current)
@@ -240,7 +237,7 @@ export function useAIChat({
 
       respondTimerRef.current = setTimeout(() => {
         triggerAIResponse(trimmed)
-      }, 1500)
+      }, 300)
     },
     [roomId, aiParticipantId, triggerAIResponse, emitDebug]
   )
@@ -248,8 +245,21 @@ export function useAIChat({
   // Sync ref so onend can check current value
   aiEnabledRef.current = aiEnabled
 
+  const simulateTranscript = useCallback(
+    (text: string) => {
+      if (!roomId || !aiParticipantId) {
+        emitDebug({ lastError: "simulateTranscript: room or AI not ready yet" })
+        return
+      }
+      handleTranscript(text)
+    },
+    [roomId, aiParticipantId, handleTranscript, emitDebug]
+  )
+
   // Start/stop recognition based on aiEnabled
   useEffect(() => {
+    cleanupRef.current = false
+
     // Stop any running recognition
     if (recognitionRef.current) {
       try {
@@ -300,6 +310,7 @@ export function useAIChat({
     }
 
     const startRecognition = () => {
+      if (cleanupRef.current) return
       const r = new SpeechRecognitionAPI()
       r.continuous = true
       r.interimResults = false
@@ -322,8 +333,8 @@ export function useAIChat({
     recognition.onend = () => {
       isRunningRef.current = false
       recognitionRef.current = null
-      if (aiEnabledRef.current) {
-        restartTimerRef.current = setTimeout(startRecognition, 500)
+      if (aiEnabledRef.current && !cleanupRef.current) {
+        restartTimerRef.current = setTimeout(startRecognition, 100)
       }
     }
 
@@ -339,7 +350,7 @@ export function useAIChat({
     }
 
     return () => {
-      aiEnabledRef.current = false
+      cleanupRef.current = true
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort()
@@ -360,4 +371,6 @@ export function useAIChat({
       isRespondingRef.current = false
     }
   }, [aiEnabled, handleTranscript, emitDebug, onStatusChange])
+
+  return { simulateTranscript }
 }

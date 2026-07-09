@@ -18,9 +18,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Load conversation context
+    // Load conversation context, familiarity, and memories in parallel
+    const supabase = await createClient()
     const engine = new ConversationEngine(room_id)
-    const messages = await engine.loadHistory()
+
+    const [messagesResult, relationshipsResult, memoriesResult] =
+      await Promise.all([
+        engine.loadHistory(),
+        supabase
+          .from("relationships")
+          .select("target_id, familiarity")
+          .eq("participant_id", ai_participant_id),
+        supabase
+          .from("memories")
+          .select("content")
+          .eq("participant_id", ai_participant_id)
+          .order("created_at", { ascending: false })
+          .limit(5),
+      ])
+
+    const messages = messagesResult
     const transcript = engine.getTranscript()
     const activeSpeakers = engine.getActiveSpeakers()
 
@@ -31,27 +48,36 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Load familiarity data
-    const supabase = await createClient()
-    const { data: relationships } = await supabase
-      .from("relationships")
-      .select("target_id, familiarity")
-      .eq("participant_id", ai_participant_id)
+    // Build familiarity map — batch resolve usernames
+    const relationshipTargetIds = (
+      relationshipsResult.data || []
+    ).map((r: { target_id: string }) => r.target_id)
 
-    const familiarity: Record<string, number> = {}
-    for (const rel of relationships || []) {
-      const { data: target } = await supabase
+    let familiarity: Record<string, number> = {}
+    if (relationshipTargetIds.length > 0) {
+      const { data: targets } = await supabase
         .from("participants")
-        .select("username")
-        .eq("id", rel.target_id)
-        .single()
-      if (target) {
-        familiarity[target.username] = rel.familiarity
+        .select("id, username")
+        .in("id", relationshipTargetIds)
+
+      const usernameMap = new Map(
+        (targets || []).map((t: { id: string; username: string }) => [
+          t.id,
+          t.username,
+        ])
+      )
+
+      for (const rel of relationshipsResult.data || []) {
+        const username = usernameMap.get(rel.target_id)
+        if (username) {
+          familiarity[username] = rel.familiarity
+        }
       }
     }
 
     // Humalike decides behavior
     const decision = await getHumalikeDecision({
+      roomId: room_id,
       transcript,
       activeSpeakers,
       speakerCount: messages.length,
@@ -66,31 +92,25 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Load memories
-    const { data: memories } = await supabase
-      .from("memories")
-      .select("content")
-      .eq("participant_id", ai_participant_id)
-      .order("created_at", { ascending: false })
-      .limit(5)
-
     // Generate response
-    const responseText = await generateResponse({
+    const { text: responseText, llmError } = await generateResponse({
       transcript,
       aiName: ai_name || "AI",
       tone: decision.tone,
       emotion: decision.emotion,
       targetUser: decision.targetUser,
-      memories: (memories || []).map((m: { content: string }) => m.content),
+      memories: (memoriesResult.data || []).map(
+        (m: { content: string }) => m.content
+      ),
       familiarity,
     })
 
-    // Save the AI message
-    await engine.addMessage(
-      ai_participant_id,
-      ai_name || "AI",
-      responseText
-    )
+    if (llmError) {
+      console.error("AI respond LLM error:", llmError)
+    }
+
+    // Save the AI message (fire-and-forget to not block response)
+    engine.addMessage(ai_participant_id, ai_name || "AI", responseText)
 
     return NextResponse.json({
       should_respond: true,
@@ -98,6 +118,7 @@ export async function POST(request: NextRequest) {
       tone: decision.tone,
       emotion: decision.emotion,
       targetUser: decision.targetUser,
+      llmError: llmError || null,
     })
   } catch (error) {
     console.error("AI respond pipeline failed:", error)

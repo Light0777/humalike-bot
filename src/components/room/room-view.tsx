@@ -30,6 +30,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
   const [aiStatus, setAiStatus] = useState<AIStatusType>("idle")
   const [aiLoading, setAiLoading] = useState(false)
   const [aiDebug, setAiDebug] = useState<AIChatDebug | null>(null)
+  const [localParticipantId, setLocalParticipantId] = useState("")
   const [connected, setConnected] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -44,8 +45,9 @@ export function RoomView({ roomId, username }: RoomViewProps) {
 
   const aiParticipant = participants.find((p) => p.is_ai) ?? null
 
-  useAIChat({
+  const { simulateTranscript } = useAIChat({
     roomId: backendRoomId || null,
+    localParticipantId: localParticipantId || null,
     aiParticipantId: aiParticipant?.id ?? null,
     aiName: "AI",
     aiEnabled,
@@ -122,14 +124,16 @@ export function RoomView({ roomId, username }: RoomViewProps) {
         const room = await createRoom()
         if (room) {
           setBackendRoomId(room.id)
-          await joinRoom(room.id)
+          const participant = await joinRoom(room.id)
+          setLocalParticipantId(participant.id)
           await loadParticipants(room.id)
         }
       } else {
         const room = await fetchRoom(roomId)
         if (room) {
           setBackendRoomId(room.id)
-          await joinRoom(room.id)
+          const participant = await joinRoom(room.id)
+          setLocalParticipantId(participant.id)
           await loadParticipants(room.id)
         }
       }
@@ -312,7 +316,9 @@ export function RoomView({ roomId, username }: RoomViewProps) {
             </div>
             <AIStatus status={aiStatus} />
           </div>
-          {aiDebug && <AIDebug debug={aiDebug} />}
+          {aiDebug && (
+            <AIDebug debug={aiDebug} onSimulate={simulateTranscript} />
+          )}
         </Card>
       )}
 

@@ -1,16 +1,4 @@
-/**
- * Humalike API client.
- *
- * Humalike decides conversational behavior:
- * - whether to speak or stay silent
- * - who to respond to
- * - emotional tone
- * - social dynamics
- */
-
-const HUMALIKE_API_URL =
-  process.env.HUMALIKE_API_URL || "http://localhost:8080"
-const HUMALIKE_API_KEY = process.env.HUMALIKE_API_KEY || ""
+import { submitMessages } from "@/lib/ai/humalike-turn-taking"
 
 export interface HumalikeDecision {
   shouldSpeak: boolean
@@ -22,6 +10,7 @@ export interface HumalikeDecision {
 }
 
 interface HumalikeRequest {
+  roomId: string
   transcript: string
   activeSpeakers: string[]
   speakerCount: number
@@ -33,39 +22,73 @@ interface HumalikeRequest {
 export async function getHumalikeDecision(
   input: HumalikeRequest
 ): Promise<HumalikeDecision> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  }
+  // Extract the latest user messages from the transcript
+  const lines = input.transcript.split("\n").filter(Boolean)
+  const latestMessages = lines.slice(-5).map((line) => {
+    const colon = line.indexOf(":")
+    if (colon === -1) return { sender: "user", content: line }
+    return {
+      sender: line.slice(0, colon).trim(),
+      content: line.slice(colon + 1).trim(),
+    }
+  })
 
-  if (HUMALIKE_API_KEY) {
-    headers["Authorization"] = `Bearer ${HUMALIKE_API_KEY}`
+  // Filter out AI's own messages — only submit human speech
+  const humanMessages = latestMessages.filter(
+    (m) => m.sender !== "AI"
+  )
+
+  if (humanMessages.length === 0) {
+    return getDefaultDecision(input)
   }
 
   try {
-    const response = await fetch(`${HUMALIKE_API_URL}/decide`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(input),
-    })
+    const result = await submitMessages(input.roomId, humanMessages)
 
-    if (!response.ok) {
-      console.warn(
-        `Humalike API returned ${response.status}, falling back to default decision`
-      )
+    if (!result) {
+      console.log("Humalike submitMessages returned null, using default decision")
       return getDefaultDecision(input)
     }
 
-    const decision = await response.json()
-    return {
-      shouldSpeak: decision.should_speak ?? false,
-      targetUser: decision.target_user ?? input.activeSpeakers[0] ?? "",
-      tone: decision.tone ?? "neutral",
-      emotion: decision.emotion ?? "neutral",
-      confidence: decision.confidence ?? 0.5,
-      reasoning: decision.reasoning ?? "",
+    console.log(
+      `Humalike decision: ${result.decision} (turn_epoch=${result.turnEpoch})`
+    )
+
+    if (result.decision === "stay_silent") {
+      const lastContent = humanMessages.at(-1)?.content?.toLowerCase() ?? ""
+      const isGreeting = /^(hi|hello|hey|yo|sup|howdy|h(?:i|ey|ello)\b)/i.test(lastContent)
+      if (isGreeting) {
+        console.log("Humalike stay_silent overridden: greeting detected")
+        return {
+          shouldSpeak: true,
+          targetUser: input.activeSpeakers[0] || "",
+          tone: "warm",
+          emotion: "happy",
+          confidence: 0.9,
+          reasoning: `Greeting override (turn_epoch=${result.turnEpoch})`,
+        }
+      }
+      return {
+        shouldSpeak: false,
+        targetUser: input.activeSpeakers[0] || "",
+        tone: "neutral",
+        emotion: "thoughtful",
+        confidence: 0.5,
+        reasoning: `Humalike: stay_silent (turn_epoch=${result.turnEpoch})`,
+      }
     }
-  } catch {
-    console.warn("Humalike API unavailable, using default decision")
+
+    console.log("Humalike decided to speak")
+    return {
+      shouldSpeak: true,
+      targetUser: input.activeSpeakers[0] || "",
+      tone: "neutral",
+      emotion: "curious",
+      confidence: 0.7,
+      reasoning: `Humalike: speak (turn_epoch=${result.turnEpoch})`,
+    }
+  } catch (e) {
+    console.error("Humalike decision error:", e)
     return getDefaultDecision(input)
   }
 }
@@ -75,21 +98,19 @@ function getDefaultDecision(
 ): HumalikeDecision {
   const lines = input.transcript.split("\n").filter(Boolean)
   const lastLine = lines.at(-1) ?? ""
-  const lastContent = lastLine.replace(/^[^:]+:\s*/, "")
+  const lastContent = lastLine.replace(/^[^:]+:\s*/, "").trim().toLowerCase()
 
   const isQuestion =
     /\?\s*$/.test(lastContent) ||
     /^(can|could|will|would|do|does|is|are|what|why|how|tell|give)\b/i.test(lastContent)
 
+  const isGreeting = /^(hi|hello|hey|yo|sup|howdy|h(?:i|ey|ello)\b)/i.test(lastContent)
+
   let shouldSpeak: boolean
   if (input.speakerCount === 0) {
     shouldSpeak = false
-  } else if (isQuestion) {
-    shouldSpeak = true
-  } else if (input.speakerCount >= 3) {
-    shouldSpeak = Math.random() < 0.4
   } else {
-    shouldSpeak = Math.random() < 0.3
+    shouldSpeak = true
   }
 
   return {
@@ -98,6 +119,6 @@ function getDefaultDecision(
     tone: "neutral",
     emotion: "thoughtful",
     confidence: 0.4,
-    reasoning: "default decision (Humalike API unavailable)",
+    reasoning: "Humalike unavailable, using default decision",
   }
 }

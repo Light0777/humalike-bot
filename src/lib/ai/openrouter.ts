@@ -9,7 +9,7 @@ const OPENROUTER_API_URL =
   "https://openrouter.ai/api/v1/chat/completions"
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ""
 const OPENROUTER_MODEL =
-  process.env.OPENROUTER_MODEL || "tencent/hy3:free"
+  process.env.OPENROUTER_MODEL || "poolside/laguna-xs-2.1:free"
 
 interface OpenRouterMessage {
   role: "system" | "user" | "assistant"
@@ -28,10 +28,12 @@ interface ResponseInput {
 
 export async function generateResponse(
   input: ResponseInput
-): Promise<string> {
+): Promise<{ text: string; llmError?: string }> {
   if (!OPENROUTER_API_KEY) {
-    console.warn("OPENROUTER_API_KEY not set, using fallback response")
-    return getFallbackResponse(input)
+    return {
+      text: getFallbackResponse(input),
+      llmError: "OPENROUTER_API_KEY not set",
+    }
   }
 
   const systemPrompt = buildSystemPrompt(input)
@@ -54,29 +56,36 @@ export async function generateResponse(
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
         messages,
-        max_tokens: 150,
-        temperature: 0.8,
+        max_tokens: 80,
+        temperature: 0.9,
         top_p: 0.9,
       }),
     })
 
     if (!response.ok) {
       const error = await response.text()
-      console.error("OpenRouter error:", error)
-      return getFallbackResponse(input)
+      return {
+        text: getFallbackResponse(input),
+        llmError: `OpenRouter ${response.status}: ${error.slice(0, 200)}`,
+      }
     }
 
     const data = await response.json()
     const text = data.choices?.[0]?.message?.content
 
     if (!text) {
-      return getFallbackResponse(input)
+      return {
+        text: getFallbackResponse(input),
+        llmError: "OpenRouter returned empty response",
+      }
     }
 
-    return text.trim()
+    return { text: text.trim() }
   } catch (error) {
-    console.error("OpenRouter request failed:", error)
-    return getFallbackResponse(input)
+    return {
+      text: getFallbackResponse(input),
+      llmError: `OpenRouter request failed: ${error instanceof Error ? error.message : error}`,
+    }
   }
 }
 
