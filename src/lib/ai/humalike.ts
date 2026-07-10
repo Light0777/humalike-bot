@@ -122,3 +122,41 @@ function getDefaultDecision(
     reasoning: "Humalike unavailable, using default decision",
   }
 }
+
+/**
+ * Early intent prediction on a partial transcript.
+ * Returns true if the partial text strongly suggests the user wants a response.
+ */
+export function predictIntent(partialText: string): {
+  likelyWantsResponse: boolean
+  confidence: number
+  predictedType: "question" | "greeting" | "statement" | "unknown"
+} {
+  const text = partialText.toLowerCase().trim()
+
+  const questionStarts = [
+    "can", "could", "will", "would", "do", "does",
+    "is", "are", "what", "why", "how", "tell", "give",
+    "have", "has", "did", "was", "were", "should",
+    "who", "where", "when", "which",
+  ]
+
+  const firstWord = text.split(/\s+/)[0] || ""
+  const isQuestionStart = questionStarts.includes(firstWord)
+  const hasQuestionMark = text.includes("?")
+  const isGreeting = /^(hi|hello|hey|yo|sup|howdy|h(?:i|ey|ello)\b)/i.test(text)
+
+  if (isGreeting) {
+    return { likelyWantsResponse: true, confidence: 0.9, predictedType: "greeting" }
+  }
+
+  if (hasQuestionMark || isQuestionStart) {
+    return { likelyWantsResponse: true, confidence: 0.8, predictedType: "question" }
+  }
+
+  if (text.length > 10) {
+    return { likelyWantsResponse: true, confidence: 0.5, predictedType: "statement" }
+  }
+
+  return { likelyWantsResponse: false, confidence: 0.2, predictedType: "unknown" }
+}

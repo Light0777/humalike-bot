@@ -27,8 +27,6 @@ export async function POST(request: NextRequest) {
     })
 
     if (!response.ok) {
-      const error = await response.text()
-      console.error("TTS service error:", error)
       return NextResponse.json(
         { error: "Speech synthesis failed" },
         { status: 502 }
@@ -43,8 +41,7 @@ export async function POST(request: NextRequest) {
         "Content-Disposition": 'attachment; filename="speech.mp3"',
       },
     })
-  } catch (error) {
-    console.error("TTS proxy error:", error)
+  } catch {
     return NextResponse.json(
       { error: "TTS service unavailable" },
       { status: 503 }

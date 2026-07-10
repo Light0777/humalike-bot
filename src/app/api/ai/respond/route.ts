@@ -7,7 +7,14 @@ import { createClient } from "@/lib/supabase/server"
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { room_id, ai_participant_id, ai_name } = body
+    const {
+      room_id,
+      ai_participant_id,
+      ai_name,
+      transcript: clientTranscript,
+      active_speakers: clientActiveSpeakers,
+      speaker_count: clientSpeakerCount,
+    } = body
 
     if (!room_id || !ai_participant_id) {
       return NextResponse.json(
@@ -18,13 +25,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Load conversation context, familiarity, and memories in parallel
     const supabase = await createClient()
     const engine = new ConversationEngine(room_id)
 
+    // Load familiarity and memories in parallel
     const [messagesResult, relationshipsResult, memoriesResult] =
       await Promise.all([
-        engine.loadHistory(),
+        // Only load history if client didn't provide transcript
+        clientTranscript
+          ? Promise.resolve([])
+          : engine.loadHistory(),
         supabase
           .from("relationships")
           .select("target_id, familiarity")
@@ -37,11 +47,12 @@ export async function POST(request: NextRequest) {
           .limit(5),
       ])
 
-    const messages = messagesResult
-    const transcript = engine.getTranscript()
-    const activeSpeakers = engine.getActiveSpeakers()
+    // Use client-provided context or load from engine
+    const transcript = clientTranscript || engine.getTranscript()
+    const activeSpeakers = clientActiveSpeakers || engine.getActiveSpeakers()
+    const speakerCount = clientSpeakerCount || messagesResult.length
 
-    if (messages.length === 0) {
+    if (!transcript && messagesResult.length === 0) {
       return NextResponse.json({
         should_respond: false,
         reason: "No conversation history yet",
@@ -80,7 +91,7 @@ export async function POST(request: NextRequest) {
       roomId: room_id,
       transcript,
       activeSpeakers,
-      speakerCount: messages.length,
+      speakerCount,
       familiarity,
       recentTopics: [],
     })

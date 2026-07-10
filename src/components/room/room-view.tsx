@@ -50,6 +50,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     localParticipantId: localParticipantId || null,
     aiParticipantId: aiParticipant?.id ?? null,
     aiName: "AI",
+    username,
     aiEnabled,
     onStatusChange: setAiStatus,
     onDebug: setAiDebug,
