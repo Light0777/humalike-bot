@@ -24,7 +24,7 @@ interface UseAIChatOptions {
   aiEnabled: boolean
   onStatusChange: (status: AIStatus) => void
   onDebug?: (debug: AIChatDebug) => void
-  onTranscript?: (text: string, isFinal: boolean) => void
+  onTranscript?: (userId: string, username: string, text: string, isFinal: boolean) => void
 }
 
 declare global {
@@ -88,7 +88,7 @@ export function useAIChat({
         onStatusChangeRef.current(status as AIStatus)
       },
       onTranscriptUpdate: (update: TranscriptUpdate) => {
-        onTranscriptRef.current?.(update.text, update.isFinal)
+        onTranscriptRef.current?.(update.userId, update.username, update.text, update.isFinal)
         if (update.isFinal) {
           emitDebugRef.current({
             transcripts: [

@@ -94,7 +94,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
   const aiParticipant = participants.find((p) => p.is_ai) ?? null
 
   const handleLocalTranscript = useCallback(
-    (text: string, isFinal: boolean) => {
+    (_userId: string, _username: string, text: string, isFinal: boolean) => {
       broadcastTranscript(text, isFinal)
     },
     [broadcastTranscript]

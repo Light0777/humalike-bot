@@ -239,6 +239,7 @@ export class VoicePipeline {
     this.callbacks.onStatusChange("thinking")
 
     const transcript = this.stateManager.getTranscript()
+    const messages = this.stateManager.getTranscriptMessages()
     const activeSpeakers = this.stateManager.getActiveSpeakers()
     const speakerCount = this.stateManager.getSpeakerCount()
 
@@ -251,6 +252,7 @@ export class VoicePipeline {
           ai_participant_id: this.aiParticipantId,
           ai_name: this.aiName,
           transcript,
+          messages,
           active_speakers: activeSpeakers,
           speaker_count: speakerCount,
         }),
@@ -277,6 +279,11 @@ export class VoicePipeline {
       if (decision.text) {
         this.callbacks.onStatusChange("speaking")
         await speakResponse(decision.text)
+        // Inject AI's own speech into conversation state
+        const aiId = this.aiParticipantId || "ai-assistant"
+        this.stateManager.startSpeaking(aiId, this.aiName)
+        this.stateManager.updateTranscript(aiId, decision.text, 1.0, true)
+        this.stateManager.endSpeaking(aiId)
       }
     } catch (e) {
       this.callbacks.onDebug(`Pipeline error: ${e}`)
@@ -292,6 +299,7 @@ export class VoicePipeline {
     this.callbacks.onStatusChange("thinking")
 
     const transcript = this.stateManager.getTranscript()
+    const messages = this.stateManager.getTranscriptMessages()
     const activeSpeakers = this.stateManager.getActiveSpeakers()
 
     this.currentAbortController = new AbortController()
@@ -305,6 +313,7 @@ export class VoicePipeline {
           ai_participant_id: this.aiParticipantId,
           ai_name: this.aiName,
           transcript,
+          messages,
           active_speakers: activeSpeakers,
           speaker_count: this.stateManager.getSpeakerCount(),
         }),
@@ -347,6 +356,12 @@ export class VoicePipeline {
           if (sentence.trim()) {
             this.tts.enqueue(sentence.trim())
           }
+
+          // Inject AI's own speech into conversation state
+          const aiId = this.aiParticipantId || "ai-assistant"
+          this.stateManager.startSpeaking(aiId, this.aiName)
+          this.stateManager.updateTranscript(aiId, fullText, 1.0, true)
+          this.stateManager.endSpeaking(aiId)
 
           fetch("/api/conversations", {
             method: "POST",

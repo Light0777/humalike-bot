@@ -11,11 +11,19 @@ export interface SpeakerState {
   confidence: number
 }
 
+export interface TranscriptMessage {
+  participantId: string
+  participantUsername: string
+  content: string
+  timestamp: number
+}
+
 export interface ConversationState {
   speakers: Map<string, SpeakerState>
   activeSpeakerId: string | null
   silenceDuration: number
   transcript: string
+  messages: TranscriptMessage[]
 }
 
 export class ConversationStateManager {
@@ -24,6 +32,7 @@ export class ConversationStateManager {
     activeSpeakerId: null,
     silenceDuration: 0,
     transcript: "",
+    messages: [],
   }
 
   private listeners = new Map<string, Set<Listener>>()
@@ -99,6 +108,12 @@ export class ConversationStateManager {
 
     if (isFinal) {
       this.state.transcript += `${speaker.username}: ${text}\n`
+      this.state.messages.push({
+        participantId: userId,
+        participantUsername: speaker.username,
+        content: text,
+        timestamp: Date.now(),
+      })
     }
 
     this.emit("transcriptUpdate")
@@ -161,11 +176,16 @@ export class ConversationStateManager {
     }
   }
 
+  getTranscriptMessages(): TranscriptMessage[] {
+    return this.state.messages
+  }
+
   reset() {
     this.state.speakers.clear()
     this.state.activeSpeakerId = null
     this.state.silenceDuration = 0
     this.state.transcript = ""
+    this.state.messages = []
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer)
       this.silenceTimer = null

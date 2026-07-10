@@ -9,9 +9,17 @@ export interface HumalikeDecision {
   reasoning: string
 }
 
+export interface TranscriptMessage {
+  participantId: string
+  participantUsername: string
+  content: string
+  timestamp: number
+}
+
 interface HumalikeRequest {
   roomId: string
   transcript: string
+  messages?: TranscriptMessage[]
   activeSpeakers: string[]
   speakerCount: number
   lastAiMessage?: string
@@ -22,19 +30,25 @@ interface HumalikeRequest {
 export async function getHumalikeDecision(
   input: HumalikeRequest
 ): Promise<HumalikeDecision> {
-  // Extract the latest user messages from the transcript
-  const lines = input.transcript.split("\n").filter(Boolean)
-  const latestMessages = lines.slice(-5).map((line) => {
-    const colon = line.indexOf(":")
-    if (colon === -1) return { sender: "user", content: line }
-    return {
-      sender: line.slice(0, colon).trim(),
-      content: line.slice(colon + 1).trim(),
-    }
-  })
+  // Extract the latest user messages, preferring structured messages
+  const rawMessages = input.messages?.length
+    ? input.messages.slice(-5).map((m) => ({
+        sender: m.participantUsername,
+        content: m.content,
+        participantId: m.participantId,
+      }))
+    : input.transcript.split("\n").filter(Boolean).slice(-5).map((line) => {
+        const colon = line.indexOf(":")
+        if (colon === -1) return { sender: "user", content: line, participantId: "" }
+        return {
+          sender: line.slice(0, colon).trim(),
+          content: line.slice(colon + 1).trim(),
+          participantId: "",
+        }
+      })
 
   // Filter out AI's own messages — only submit human speech
-  const humanMessages = latestMessages.filter(
+  const humanMessages = rawMessages.filter(
     (m) => m.sender !== "AI"
   )
 

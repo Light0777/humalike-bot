@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
       ai_participant_id,
       ai_name,
       transcript: clientTranscript,
+      messages: clientMessages,
       active_speakers: clientActiveSpeakers,
       speaker_count: clientSpeakerCount,
     } = body
@@ -90,6 +91,7 @@ export async function POST(request: NextRequest) {
     const decision = await getHumalikeDecision({
       roomId: room_id,
       transcript,
+      messages: clientMessages,
       activeSpeakers,
       speakerCount,
       familiarity,
