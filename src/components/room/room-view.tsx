@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -36,16 +36,71 @@ export function RoomView({ roomId, username }: RoomViewProps) {
   const [error, setError] = useState("")
 
   const userId = getUserId()
+  const pipelineTranscriptRef = useRef<{
+    userId: string
+    username: string
+    text: string
+    isFinal: boolean
+  } | null>(null)
+  const initializedRef = useRef(false)
 
-  const { peers, voiceState, toggleMic, toggleSpeaker } = useVoiceRoom(
+  const handleRemoteAIState = useCallback(
+    (enabled: boolean) => {
+      setAiEnabled(enabled)
+      setAiStatus(enabled ? "listening" : "idle")
+      // Update local participant list so UI reflects the AI state immediately
+      setParticipants((prev) => {
+        const aiIndex = prev.findIndex((p) => p.user_id === aiUserId)
+        if (enabled && aiIndex === -1) {
+          return [...prev, { id: "ai-pending", user_id: aiUserId, username: "AI", is_ai: true, room_id: backendRoomId ?? "" } as Participant]
+        }
+        if (!enabled && aiIndex !== -1) {
+          return prev.filter((p) => p.user_id !== aiUserId)
+        }
+        return prev
+      })
+    },
+    [backendRoomId]
+  )
+
+  // Stable AI user ID for matching in the participant list
+  const aiUserId = "ai-assistant"
+
+  const handleRemoteTranscript = useCallback(
+    (t: { userId: string; username: string; text: string; isFinal: boolean }) => {
+      if (t.isFinal) {
+        pipelineTranscriptRef.current = t
+      }
+    },
+    []
+  )
+
+  const handlePeerLeave = useCallback(
+    (peerUserId: string) => {
+      setParticipants((prev) => prev.filter((p) => p.user_id !== peerUserId))
+    },
+    []
+  )
+
+  const { peers, participants: signalingParticipants, voiceState, toggleMic, toggleSpeaker, broadcastAIState, broadcastTranscript } = useVoiceRoom(
     roomCode || "loading",
     userId,
-    username
+    username,
+    handleRemoteAIState,
+    handleRemoteTranscript,
+    handlePeerLeave
   )
 
   const aiParticipant = participants.find((p) => p.is_ai) ?? null
 
-  const { simulateTranscript } = useAIChat({
+  const handleLocalTranscript = useCallback(
+    (text: string, isFinal: boolean) => {
+      broadcastTranscript(text, isFinal)
+    },
+    [broadcastTranscript]
+  )
+
+  const { simulateTranscript, injectRemoteTranscript } = useAIChat({
     roomId: backendRoomId || null,
     localParticipantId: localParticipantId || null,
     aiParticipantId: aiParticipant?.id ?? null,
@@ -54,11 +109,21 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     aiEnabled,
     onStatusChange: setAiStatus,
     onDebug: setAiDebug,
+    onTranscript: handleLocalTranscript,
   })
 
   useEffect(() => {
     storeUsername(username)
   }, [username])
+
+  // Feed remote peer transcripts into the AI pipeline
+  useEffect(() => {
+    const t = pipelineTranscriptRef.current
+    if (t && t.isFinal && t.userId !== userId) {
+      injectRemoteTranscript(t.userId, t.username, t.text, t.isFinal)
+      pipelineTranscriptRef.current = null
+    }
+  }, [injectRemoteTranscript, userId])
 
   const fetchRoom = useCallback(async (code: string) => {
     const res = await fetch(`/api/rooms/${code}`)
@@ -117,6 +182,15 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     }
   }, [])
 
+  // Poll participants every 5 seconds to stay in sync
+  useEffect(() => {
+    if (!backendRoomId) return
+    const interval = setInterval(() => {
+      loadParticipants(backendRoomId)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [backendRoomId, loadParticipants])
+
   const initialize = useCallback(async () => {
     setLoading(true)
     setError("")
@@ -147,6 +221,8 @@ export function RoomView({ roomId, username }: RoomViewProps) {
   }, [isNewRoom, roomId, createRoom, joinRoom, loadParticipants, fetchRoom])
 
   useEffect(() => {
+    if (initializedRef.current) return
+    initializedRef.current = true
     initialize()
   }, [initialize])
 
@@ -165,6 +241,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
         })
         setAiEnabled(false)
         setAiStatus("idle")
+        broadcastAIState(false)
       } else {
         await fetch("/api/ai", {
           method: "POST",
@@ -176,17 +253,29 @@ export function RoomView({ roomId, username }: RoomViewProps) {
         })
         setAiEnabled(true)
         setAiStatus("listening")
+        broadcastAIState(true)
       }
       await loadParticipants(backendRoomId)
     } catch {
       // revert optimistic state on error
-      setAiEnabled((prev) => !prev)
+      const reverted = !aiEnabled
+      setAiEnabled(reverted)
+      broadcastAIState(reverted)
     } finally {
       setAiLoading(false)
     }
   }
 
-  const handleLeave = () => {
+  const handleLeave = async () => {
+    if (localParticipantId) {
+      try {
+        await fetch(`/api/participants?id=${localParticipantId}`, {
+          method: "DELETE",
+        })
+      } catch {
+        // best effort
+      }
+    }
     router.push("/")
   }
 

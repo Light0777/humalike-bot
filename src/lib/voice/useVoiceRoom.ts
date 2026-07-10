@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import { SignalingService } from "./signaling"
-import type { VoicePeer, VoiceState } from "./types"
+import type { VoicePeer, VoiceState, SignalingMessage } from "./types"
 
 const ICE_SERVERS = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -13,10 +13,20 @@ interface AudioAnalyser {
   dataArray: Uint8Array<ArrayBuffer>
 }
 
+export interface RemoteTranscript {
+  userId: string
+  username: string
+  text: string
+  isFinal: boolean
+}
+
 export function useVoiceRoom(
   roomCode: string,
   userId: string,
-  username: string
+  username: string,
+  onAIStateChange?: (enabled: boolean) => void,
+  onRemoteTranscript?: (t: RemoteTranscript) => void,
+  onPeerLeave?: (peerUserId: string) => void
 ) {
   const [peers, setPeers] = useState<VoicePeer[]>([])
   const [voiceState, setVoiceState] = useState<VoiceState>({
@@ -34,6 +44,9 @@ export function useVoiceRoom(
   const analyserRef = useRef<AudioAnalyser | null>(null)
   const audioElements = useRef<Map<string, HTMLAudioElement>>(new Map())
   const speakingPeers = useRef<Set<string>>(new Set())
+  const [participants, setParticipants] = useState<
+    { userId: string; username: string }[]
+  >([])
 
   // --- Audio analysis for speaking detection ---
   const setupAudioAnalyser = useCallback((stream: MediaStream) => {
@@ -46,6 +59,8 @@ export function useVoiceRoom(
     audioContextRef.current = audioCtx
     analyserRef.current = { analyser, dataArray }
 
+    let lastLevel = 0
+    let lastSpeaking = false
     const checkAudio = () => {
       if (!analyserRef.current) return
       const { analyser, dataArray } = analyserRef.current
@@ -53,11 +68,16 @@ export function useVoiceRoom(
       const avg =
         dataArray.reduce((a, b) => a + b, 0) / dataArray.length
       const level = Math.min(1, avg / 128)
-      setVoiceState((prev) => ({
-        ...prev,
-        audioLevel: level,
-        speaking: level > 0.08,
-      }))
+      const speaking = level > 0.08
+      if (level !== lastLevel || speaking !== lastSpeaking) {
+        lastLevel = level
+        lastSpeaking = speaking
+        setVoiceState((prev) => ({
+          ...prev,
+          audioLevel: level,
+          speaking,
+        }))
+      }
       requestAnimationFrame(checkAudio)
     }
     checkAudio()
@@ -220,18 +240,20 @@ export function useVoiceRoom(
       audioElements.current.delete(targetId)
     }
     setPeers((prev) => prev.filter((p) => p.userId !== targetId))
+    onPeerLeaveRef.current?.(targetId)
   }, [])
+
+  // Stable refs for callbacks to prevent handleMessage from changing on every render
+  const onAIStateChangeRef = useRef(onAIStateChange)
+  onAIStateChangeRef.current = onAIStateChange
+  const onRemoteTranscriptRef = useRef(onRemoteTranscript)
+  onRemoteTranscriptRef.current = onRemoteTranscript
+  const onPeerLeaveRef = useRef(onPeerLeave)
+  onPeerLeaveRef.current = onPeerLeave
 
   // --- Handle incoming signaling messages ---
   const handleMessage = useCallback(
-    async (msg: {
-      type: string
-      senderId: string
-      senderUsername: string
-      targetId?: string
-      sdp?: RTCSessionDescriptionInit
-      candidate?: RTCIceCandidateInit
-    }) => {
+    async (msg: SignalingMessage) => {
       if (msg.senderId === userId) return // ignore self
 
       switch (msg.type) {
@@ -253,6 +275,10 @@ export function useVoiceRoom(
             false
           )
           if (msg.sdp) {
+            // Handle glare: rollback local offer if we have one
+            if (pc.signalingState !== "stable") {
+              await pc.setLocalDescription({ type: "rollback" })
+            }
             await pc.setRemoteDescription(
               new RTCSessionDescription(msg.sdp)
             )
@@ -292,6 +318,23 @@ export function useVoiceRoom(
           }
           break
         }
+
+        case "ai-state": {
+          onAIStateChangeRef.current?.(msg.aiEnabled ?? false)
+          break
+        }
+
+        case "transcript": {
+          if (msg.transcriptText) {
+            onRemoteTranscriptRef.current?.({
+              userId: msg.senderId,
+              username: msg.senderUsername,
+              text: msg.transcriptText,
+              isFinal: msg.transcriptIsFinal ?? false,
+            })
+          }
+          break
+        }
       }
     },
     [userId, username, createPeerConnection, removePeer]
@@ -302,7 +345,15 @@ export function useVoiceRoom(
     const signaling = new SignalingService()
     signallingRef.current = signaling
 
-    const unsub = signaling.subscribe(roomCode, userId, handleMessage)
+    const unsub = signaling.subscribe(
+      roomCode,
+      userId,
+      username,
+      handleMessage,
+      (p) => {
+        setParticipants(p)
+      }
+    )
 
     signaling.announceJoin(userId, username)
 
@@ -319,6 +370,7 @@ export function useVoiceRoom(
       })
       audioElements.current.clear()
       setPeers([])
+      setParticipants([])
     }
   }, [roomCode, userId, username, handleMessage])
 
@@ -344,11 +396,28 @@ export function useVoiceRoom(
     })
   }, [])
 
+  const broadcastAIState = useCallback(
+    (enabled: boolean) => {
+      signallingRef.current?.announceAIState(userId, username, enabled)
+    },
+    [userId, username]
+  )
+
+  const broadcastTranscript = useCallback(
+    (text: string, isFinal: boolean) => {
+      signallingRef.current?.sendTranscript(userId, username, text, isFinal)
+    },
+    [userId, username]
+  )
+
   return {
     peers,
+    participants,
     voiceState,
     localStream,
     toggleMic,
     toggleSpeaker,
+    broadcastAIState,
+    broadcastTranscript,
   }
 }

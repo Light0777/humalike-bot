@@ -193,6 +193,31 @@ export class VoicePipeline {
     }
   }
 
+  injectRemoteTranscript(
+    remoteUserId: string,
+    remoteUsername: string,
+    text: string,
+    isFinal: boolean
+  ) {
+    const update: TranscriptUpdate = {
+      text,
+      isFinal,
+      confidence: 1.0,
+      userId: remoteUserId,
+      username: remoteUsername,
+    }
+
+    this.stateManager.startSpeaking(remoteUserId, remoteUsername)
+    this.stateManager.updateTranscript(remoteUserId, text, 1.0, isFinal)
+    this.stateManager.endSpeaking(remoteUserId)
+
+    this.callbacks.onTranscriptUpdate(update)
+
+    if (isFinal && !this.isResponding) {
+      this.triggerAIResponse(update)
+    }
+  }
+
   async start() {
     this.stt.start()
   }

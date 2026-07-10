@@ -9,31 +9,15 @@ import { Card } from "@/components/ui/card"
 export default function HomePage() {
   const router = useRouter()
   const [username, setUsername] = useState("")
-  const [roomCode, setRoomCode] = useState("")
   const [error, setError] = useState("")
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!username.trim()) {
       setError("Enter a username")
       return
     }
     setError("")
     router.push(`/room/new?username=${encodeURIComponent(username.trim())}`)
-  }
-
-  const handleJoin = async () => {
-    if (!username.trim()) {
-      setError("Enter a username")
-      return
-    }
-    if (!roomCode.trim()) {
-      setError("Enter a room code")
-      return
-    }
-    setError("")
-    router.push(
-      `/room/${roomCode.trim().toUpperCase()}?username=${encodeURIComponent(username.trim())}`
-    )
   }
 
   return (
@@ -58,38 +42,23 @@ export default function HomePage() {
             maxLength={20}
           />
 
-          <div className="space-y-2">
-            <Button className="w-full" onClick={handleCreate}>
-              Create Room
-            </Button>
-          </div>
+          <Button className="w-full" onClick={handleCreate}>
+            Create Room
+          </Button>
 
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-[#ebebeb]" />
             </div>
-            <div className="relative flex justify-center text-xs text-[#888]">
-              <span className="bg-[#fafafa] px-2">or join an existing one</span>
-            </div>
           </div>
 
-          <div className="space-y-2">
-            <Input
-              id="roomCode"
-              label="Room Code"
-              placeholder="e.g. ABC123"
-              value={roomCode}
-              onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-              maxLength={6}
-            />
-            <Button
-              variant="secondary"
-              className="w-full"
-              onClick={handleJoin}
-            >
-              Join Room
-            </Button>
-          </div>
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={() => router.push("/join")}
+          >
+            Join Room
+          </Button>
         </div>
 
         {error && (

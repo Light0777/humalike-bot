@@ -24,6 +24,7 @@ interface UseAIChatOptions {
   aiEnabled: boolean
   onStatusChange: (status: AIStatus) => void
   onDebug?: (debug: AIChatDebug) => void
+  onTranscript?: (text: string, isFinal: boolean) => void
 }
 
 declare global {
@@ -41,6 +42,7 @@ export function useAIChat({
   aiEnabled,
   onStatusChange,
   onDebug,
+  onTranscript,
 }: UseAIChatOptions) {
   const pipelineRef = useRef<VoicePipeline | null>(null)
   const userIdRef = useRef(localParticipantId || "")
@@ -67,6 +69,14 @@ export function useAIChat({
     [onDebug]
   )
 
+  // Keep callback refs up-to-date so pipeline always calls the latest version
+  const onStatusChangeRef = useRef(onStatusChange)
+  onStatusChangeRef.current = onStatusChange
+  const onTranscriptRef = useRef(onTranscript)
+  onTranscriptRef.current = onTranscript
+  const emitDebugRef = useRef(emitDebug)
+  emitDebugRef.current = emitDebug
+
   // Initialize pipeline once when we have room context
   useEffect(() => {
     if (!roomId || !aiParticipantId || !localParticipantId) return
@@ -75,11 +85,12 @@ export function useAIChat({
 
     const pipeline = new VoicePipeline(localParticipantId, username, {
       onStatusChange: (status) => {
-        onStatusChange(status as AIStatus)
+        onStatusChangeRef.current(status as AIStatus)
       },
       onTranscriptUpdate: (update: TranscriptUpdate) => {
+        onTranscriptRef.current?.(update.text, update.isFinal)
         if (update.isFinal) {
-          emitDebug({
+          emitDebugRef.current({
             transcripts: [
               ...debugRef.current.transcripts.slice(-9),
               update.text,
@@ -88,11 +99,11 @@ export function useAIChat({
             partialTranscript: "",
           })
         } else {
-          emitDebug({ partialTranscript: update.text })
+          emitDebugRef.current({ partialTranscript: update.text })
         }
       },
       onDebug: (msg: string) => {
-        emitDebug({
+        emitDebugRef.current({
           lastDecision: msg,
           responseCount:
             debugRef.current.responseCount +
@@ -117,7 +128,7 @@ export function useAIChat({
       window.voicePipeline = undefined
       isPipelineReady.current = false
     }
-  }, [roomId, aiParticipantId, localParticipantId, aiName, aiEnabled, onStatusChange, emitDebug])
+  }, [roomId, aiParticipantId, localParticipantId, aiName, aiEnabled])
 
   const simulateTranscript = useCallback(
     (text: string) => {
@@ -133,5 +144,14 @@ export function useAIChat({
     [roomId, aiParticipantId, emitDebug]
   )
 
-  return { simulateTranscript }
+  const injectRemoteTranscript = useCallback(
+    (userId: string, username: string, text: string, isFinal: boolean) => {
+      if (pipelineRef.current) {
+        pipelineRef.current.injectRemoteTranscript(userId, username, text, isFinal)
+      }
+    },
+    []
+  )
+
+  return { simulateTranscript, injectRemoteTranscript }
 }

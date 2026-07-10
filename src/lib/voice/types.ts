@@ -7,12 +7,15 @@ export interface VoicePeer {
 }
 
 export interface SignalingMessage {
-  type: "join" | "leave" | "offer" | "answer" | "ice-candidate"
+  type: "join" | "leave" | "offer" | "answer" | "ice-candidate" | "ai-state" | "transcript"
   senderId: string
   senderUsername: string
   targetId?: string
   sdp?: RTCSessionDescriptionInit
   candidate?: RTCIceCandidateInit
+  aiEnabled?: boolean
+  transcriptText?: string
+  transcriptIsFinal?: boolean
 }
 
 export interface VoiceState {

@@ -29,6 +29,23 @@ export async function addParticipant(
   isAi = false
 ) {
   const supabase = await createClient()
+  // Upsert: avoid duplicates from StrictMode double-invocation
+  const { data: existing } = await supabase
+    .from("participants")
+    .select("id, username, is_ai")
+    .eq("room_id", roomId)
+    .eq("user_id", userId)
+    .maybeSingle()
+  if (existing) {
+    const { data, error } = await supabase
+      .from("participants")
+      .update({ username, is_ai: isAi, updated_at: new Date().toISOString() })
+      .eq("id", existing.id)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  }
   const { data, error } = await supabase
     .from("participants")
     .insert({ room_id: roomId, user_id: userId, username, is_ai: isAi })
