@@ -25,6 +25,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
 
   const [roomCode, setRoomCode] = useState(isNewRoom ? "" : roomId)
   const [backendRoomId, setBackendRoomId] = useState("")
+  const [isHost, setIsHost] = useState(isNewRoom)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [aiEnabled, setAiEnabled] = useState(false)
   const [aiStatus, setAiStatus] = useState<AIStatusType>("idle")
@@ -144,6 +145,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     if (!res.ok) throw new Error("Failed to create room")
     const room = await res.json()
     setRoomCode(room.code)
+    setIsHost(true)
     return room
   }, [username])
 
@@ -336,18 +338,20 @@ export function RoomView({ roomId, username }: RoomViewProps) {
           <h2 className="text-sm font-medium text-[#4d4d4d]">
             Participants ({participants.length})
           </h2>
-          <Button
-            variant={aiEnabled ? "secondary" : "primary"}
-            size="sm"
-            onClick={handleToggleAI}
-            disabled={aiLoading}
-          >
-            {aiLoading
-              ? "..."
-              : aiEnabled
-                ? "Remove AI"
-                : "Add AI"}
-          </Button>
+          {isHost && (
+            <Button
+              variant={aiEnabled ? "secondary" : "primary"}
+              size="sm"
+              onClick={handleToggleAI}
+              disabled={aiLoading}
+            >
+              {aiLoading
+                ? "..."
+                : aiEnabled
+                  ? "Remove AI"
+                  : "Add AI"}
+            </Button>
+          )}
         </div>
         <ParticipantList
           participants={participants}
