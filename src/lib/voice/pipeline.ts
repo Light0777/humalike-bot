@@ -1,69 +1,7 @@
 import { ConversationStateManager } from "./conversation-state"
 import { StreamingSTT, type TranscriptUpdate } from "./streaming-stt"
 import { StreamingTTS, type TTSStatus } from "./streaming-tts"
-import { streamLLMResponse } from "@/lib/ai/streaming-llm"
 import { predictIntent } from "@/lib/ai/humalike"
-
-const OPENROUTER_API_KEY = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || ""
-const OPENROUTER_MODEL = process.env.NEXT_PUBLIC_OPENROUTER_MODEL || process.env.OPENROUTER_MODEL || "poolside/laguna-xs-2.1:free"
-
-async function speakResponse(text: string): Promise<void> {
-  try {
-    const ttsRes = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    })
-    if (!ttsRes.ok) {
-      console.warn("TTS API returned", ttsRes.status)
-      await useBrowserTTS(text)
-      return
-    }
-    const audioBlob = await ttsRes.blob()
-    const audioUrl = URL.createObjectURL(audioBlob)
-    const audio = new Audio(audioUrl)
-    await new Promise<void>((resolve) => {
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl)
-        resolve()
-      }
-      audio.onerror = () => {
-        URL.revokeObjectURL(audioUrl)
-        resolve()
-      }
-      audio.play()
-    })
-  } catch {
-    console.warn("TTS API fetch failed")
-    await useBrowserTTS(text)
-  }
-}
-
-function useBrowserTTS(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    if (!("speechSynthesis" in window)) {
-      resolve()
-      return
-    }
-    // Chrome loads voices asynchronously — wait for them before speaking
-    const trySpeak = () => {
-      speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.rate = 1.1
-      utterance.pitch = 1.0
-      utterance.onend = () => resolve()
-      utterance.onerror = () => resolve()
-      speechSynthesis.speak(utterance)
-    }
-    if (speechSynthesis.getVoices().length === 0) {
-      speechSynthesis.addEventListener("voiceschanged", trySpeak, { once: true })
-      // Safety timeout — speak anyway after 1s even if voices haven't loaded
-      setTimeout(trySpeak, 1000)
-    } else {
-      trySpeak()
-    }
-  })
-}
 
 export type PipelineStatus = "idle" | "listening" | "thinking" | "speaking" | "error"
 
@@ -243,65 +181,6 @@ export class VoicePipeline {
     const activeSpeakers = this.stateManager.getActiveSpeakers()
     const speakerCount = this.stateManager.getSpeakerCount()
 
-    try {
-      const respondRes = await fetch("/api/ai/respond", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          room_id: this.roomId,
-          ai_participant_id: this.aiParticipantId,
-          ai_name: this.aiName,
-          transcript,
-          messages,
-          active_speakers: activeSpeakers,
-          speaker_count: speakerCount,
-        }),
-      })
-
-      if (!respondRes.ok) {
-        this.callbacks.onDebug(`AI respond failed: ${respondRes.status}`)
-        this.isResponding = false
-        this.callbacks.onStatusChange("listening")
-        return
-      }
-
-      const decision = await respondRes.json()
-
-      if (!decision.should_respond) {
-        this.callbacks.onDebug(`Silent: ${decision.reason || "no reason"}`)
-        this.isResponding = false
-        this.callbacks.onStatusChange("listening")
-        return
-      }
-
-      this.callbacks.onDebug(`Speaking: "${decision.text?.slice(0, 80)}..."`)
-
-      if (decision.text) {
-        this.callbacks.onStatusChange("speaking")
-        await speakResponse(decision.text)
-        // Inject AI's own speech into conversation state
-        const aiId = this.aiParticipantId || "ai-assistant"
-        this.stateManager.startSpeaking(aiId, this.aiName)
-        this.stateManager.updateTranscript(aiId, decision.text, 1.0, true)
-        this.stateManager.endSpeaking(aiId)
-      }
-    } catch (e) {
-      this.callbacks.onDebug(`Pipeline error: ${e}`)
-    }
-    this.isResponding = false
-    this.callbacks.onStatusChange("listening")
-  }
-
-  private async streamAIResponse(lastUpdate: TranscriptUpdate) {
-    if (this.isResponding || !this.roomId || !this.aiParticipantId) return
-
-    this.isResponding = true
-    this.callbacks.onStatusChange("thinking")
-
-    const transcript = this.stateManager.getTranscript()
-    const messages = this.stateManager.getTranscriptMessages()
-    const activeSpeakers = this.stateManager.getActiveSpeakers()
-
     this.currentAbortController = new AbortController()
 
     try {
@@ -315,8 +194,9 @@ export class VoicePipeline {
           transcript,
           messages,
           active_speakers: activeSpeakers,
-          speaker_count: this.stateManager.getSpeakerCount(),
+          speaker_count: speakerCount,
         }),
+        signal: this.currentAbortController.signal,
       })
 
       if (!respondRes.ok) {
@@ -326,68 +206,114 @@ export class VoicePipeline {
         return
       }
 
-      const decision = await respondRes.json()
-
-      if (!decision.should_respond) {
-        this.callbacks.onDebug(`Silent: ${decision.reason || "no reason"}`)
+      // Read SSE stream
+      const contentType = respondRes.headers.get("content-type") || ""
+      if (!contentType.includes("text/event-stream")) {
+        // Non-streaming response (silence decision)
+        const decision = await respondRes.json()
+        if (!decision.should_respond) {
+          this.callbacks.onDebug(`Silent: ${decision.reason || "no reason"}`)
+        }
         this.isResponding = false
         this.callbacks.onStatusChange("listening")
         return
       }
 
-      this.callbacks.onDebug("AI decided to speak, streaming response...")
+      // Streaming SSE response
+      const reader = respondRes.body?.getReader()
+      if (!reader) {
+        this.isResponding = false
+        this.callbacks.onStatusChange("listening")
+        return
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let fullText = ""
+      let sentence = ""
+      let hasDecidedToSpeak = false
 
       this.tts.reset()
-      let sentence = ""
 
-      await streamLLMResponse({
-        apiKey: OPENROUTER_API_KEY,
-        model: OPENROUTER_MODEL,
-        systemPrompt: buildSystemPrompt(decision, transcript, activeSpeakers),
-        userPrompt: `Respond naturally as ${this.aiName}:`,
-        onToken: (token) => {
-          sentence += token
-          if (/[.!?]/.test(token) || sentence.length > 100) {
-            this.tts.enqueue(sentence.trim())
-            sentence = ""
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split("\n\n")
+        buffer = parts.pop() || ""
+
+        for (const part of parts) {
+          const lines = part.split("\n")
+          let eventType = ""
+          let dataStr = ""
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) eventType = line.slice(7)
+            else if (line.startsWith("data: ")) dataStr = line.slice(6)
           }
-        },
-        onComplete: (fullText) => {
-          if (sentence.trim()) {
-            this.tts.enqueue(sentence.trim())
+
+          if (!dataStr) continue
+
+          if (eventType === "decision") {
+            const d = JSON.parse(dataStr)
+            if (!d.should_respond) {
+              this.callbacks.onDebug(`Silent: ${d.reason || "no reason"}`)
+              this.isResponding = false
+              this.callbacks.onStatusChange("listening")
+              return
+            }
+            hasDecidedToSpeak = true
+            this.callbacks.onStatusChange("speaking")
+          } else if (eventType === "token") {
+            const { token } = JSON.parse(dataStr)
+            if (token) {
+              fullText += token
+              sentence += token
+              if (/[.!?]/.test(token) || sentence.length > 100) {
+                this.tts.enqueue(sentence.trim())
+                sentence = ""
+              }
+            }
+          } else if (eventType === "done") {
+            const { text: doneText } = JSON.parse(dataStr)
+            if (sentence.trim()) {
+              this.tts.enqueue(sentence.trim())
+            }
+
+            if (doneText) {
+              fullText = doneText
+              this.callbacks.onDebug(`Response complete: "${fullText.slice(0, 80)}..."`)
+
+              // Inject AI's own speech into conversation state
+              const aiId = this.aiParticipantId || "ai-assistant"
+              this.stateManager.startSpeaking(aiId, this.aiName)
+              this.stateManager.updateTranscript(aiId, fullText, 1.0, true)
+              this.stateManager.endSpeaking(aiId)
+
+              // Save to DB (fire-and-forget)
+              fetch("/api/conversations", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  room_id: this.roomId,
+                  participant_id: this.aiParticipantId,
+                  participant_username: this.aiName,
+                  content: fullText,
+                }),
+              }).catch(() => {})
+            }
+          } else if (eventType === "error") {
+            const { message } = JSON.parse(dataStr)
+            this.callbacks.onDebug(`Stream error: ${message}`)
           }
-
-          // Inject AI's own speech into conversation state
-          const aiId = this.aiParticipantId || "ai-assistant"
-          this.stateManager.startSpeaking(aiId, this.aiName)
-          this.stateManager.updateTranscript(aiId, fullText, 1.0, true)
-          this.stateManager.endSpeaking(aiId)
-
-          fetch("/api/conversations", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              room_id: this.roomId,
-              participant_id: this.aiParticipantId,
-              participant_username: this.aiName,
-              content: fullText,
-            }),
-          }).catch(() => {})
-
-          this.callbacks.onDebug(`Response complete: "${fullText.slice(0, 80)}..."`)
-        },
-        onError: (error) => {
-          this.callbacks.onDebug(`LLM error: ${error}`)
-          this.isResponding = false
-          this.callbacks.onStatusChange("listening")
-        },
-        signal: this.currentAbortController.signal,
-      })
+        }
+      }
     } catch (e) {
-      this.callbacks.onDebug(`Stream error: ${e}`)
-      this.isResponding = false
-      this.callbacks.onStatusChange("listening")
+      this.callbacks.onDebug(`Pipeline error: ${e}`)
     }
+    this.isResponding = false
+    this.callbacks.onStatusChange("listening")
   }
 
   interrupt() {
@@ -401,23 +327,4 @@ export class VoicePipeline {
   }
 }
 
-function buildSystemPrompt(
-  decision: any,
-  transcript: string,
-  activeSpeakers: string[]
-): string {
-  return (
-    `You are ${"AI"}, a human-like participant in a voice chat room. ` +
-    `You speak naturally, like a friend in the conversation. ` +
-    `Current tone: ${decision.tone || "neutral"}. Current emotion: ${decision.emotion || "thoughtful"}. ` +
-    `You are responding to ${decision.targetUser || activeSpeakers[0] || "the group"}.` +
-    `\n\nRules:` +
-    `\n- Respond directly to what was just said. Stay on topic.` +
-    `\n- Speak naturally, like a human, not a chatbot.` +
-    `\n- Keep responses concise (1-3 sentences).` +
-    `\n- Show personality.` +
-    `\n- Never introduce yourself.` +
-    `\n- Never say "as an AI" or similar.` +
-    `\n\nRecent conversation:\n${transcript}`
-  )
-}
+
