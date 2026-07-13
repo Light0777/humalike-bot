@@ -31,6 +31,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
   const [aiStatus, setAiStatus] = useState<AIStatusType>("idle")
   const [aiLoading, setAiLoading] = useState(false)
   const [aiDebug, setAiDebug] = useState<AIChatDebug | null>(null)
+  const [sttStatus, setSttStatus] = useState<"listening" | "idle" | "error" | "no-mic">("idle")
   const [localParticipantId, setLocalParticipantId] = useState("")
   const [connected, setConnected] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -44,6 +45,8 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     isFinal: boolean
   } | null>(null)
   const initializedRef = useRef(false)
+  const [textInput, setTextInput] = useState("")
+  const textInputRef = useRef<HTMLInputElement>(null)
 
   const handleRemoteAIState = useCallback(
     (enabled: boolean) => {
@@ -83,7 +86,7 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     []
   )
 
-  const { peers, participants: signalingParticipants, voiceState, toggleMic, toggleSpeaker, broadcastAIState, broadcastTranscript } = useVoiceRoom(
+  const { peers, participants: signalingParticipants, voiceState, localStream, toggleMic, toggleSpeaker, broadcastAIState, broadcastTranscript } = useVoiceRoom(
     roomCode || "loading",
     userId,
     username,
@@ -101,6 +104,13 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     [broadcastTranscript]
   )
 
+  const handleSTTStatus = useCallback(
+    (status: "listening" | "idle" | "error" | "no-mic") => {
+      setSttStatus(status)
+    },
+    []
+  )
+
   const { simulateTranscript, injectRemoteTranscript } = useAIChat({
     roomId: backendRoomId || null,
     localParticipantId: localParticipantId || null,
@@ -108,9 +118,11 @@ export function RoomView({ roomId, username }: RoomViewProps) {
     aiName: "AI",
     username,
     aiEnabled,
+    localStream,
     onStatusChange: setAiStatus,
     onDebug: setAiDebug,
     onTranscript: handleLocalTranscript,
+    onSTTStatus: handleSTTStatus,
   })
 
   useEffect(() => {
@@ -411,9 +423,63 @@ export function RoomView({ roomId, username }: RoomViewProps) {
             <AIStatus status={aiStatus} />
           </div>
           {aiDebug && (
-            <AIDebug debug={aiDebug} onSimulate={simulateTranscript} />
+            <AIDebug debug={aiDebug} />
           )}
         </Card>
+      )}
+
+      {aiEnabled && sttStatus === "no-mic" && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+          <span className="flex-1">Microphone access denied</span>
+          <button
+            onClick={async () => {
+              try {
+                await navigator.mediaDevices.getUserMedia({ audio: true })
+                setSttStatus("idle")
+              } catch {
+                setSttStatus("no-mic")
+              }
+            }}
+            className="px-3 py-1 rounded bg-amber-200 hover:bg-amber-300 transition-colors text-xs font-medium"
+          >
+            Enable
+          </button>
+        </div>
+      )}
+
+      {aiEnabled && (
+        <div className="flex gap-2">
+          <input
+            ref={textInputRef}
+            type="text"
+            value={textInput}
+            onChange={(e) => setTextInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const text = textInput.trim()
+                if (text) {
+                  simulateTranscript(text)
+                  setTextInput("")
+                }
+              }
+            }}
+            placeholder="Type a message..."
+            className="flex-1 text-sm px-3 py-2 border border-[#ebebeb] rounded-lg bg-transparent text-[#4d4d4d] outline-none focus:border-[#888] transition-colors"
+          />
+          <button
+            onClick={() => {
+              const text = textInput.trim()
+              if (text) {
+                simulateTranscript(text)
+                setTextInput("")
+              }
+            }}
+            disabled={!textInput.trim()}
+            className="px-4 py-2 text-sm rounded-lg bg-[#171717] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#2a2a2a] transition-colors"
+          >
+            Send
+          </button>
+        </div>
       )}
 
       <div className="text-center text-xs text-[#888] mt-auto">

@@ -22,9 +22,11 @@ interface UseAIChatOptions {
   aiName: string
   username: string
   aiEnabled: boolean
+  localStream?: MediaStream | null
   onStatusChange: (status: AIStatus) => void
   onDebug?: (debug: AIChatDebug) => void
   onTranscript?: (userId: string, username: string, text: string, isFinal: boolean) => void
+  onSTTStatus?: (status: "listening" | "idle" | "error" | "no-mic") => void
 }
 
 declare global {
@@ -40,9 +42,11 @@ export function useAIChat({
   aiName,
   username,
   aiEnabled,
+  localStream,
   onStatusChange,
   onDebug,
   onTranscript,
+  onSTTStatus,
 }: UseAIChatOptions) {
   const pipelineRef = useRef<VoicePipeline | null>(null)
   const userIdRef = useRef(localParticipantId || "")
@@ -74,6 +78,8 @@ export function useAIChat({
   onStatusChangeRef.current = onStatusChange
   const onTranscriptRef = useRef(onTranscript)
   onTranscriptRef.current = onTranscript
+  const onSTTStatusRef = useRef(onSTTStatus)
+  onSTTStatusRef.current = onSTTStatus
   const emitDebugRef = useRef(emitDebug)
   emitDebugRef.current = emitDebug
 
@@ -83,34 +89,42 @@ export function useAIChat({
     if (isPipelineReady.current) return
     if (pipelineRef.current) return
 
-    const pipeline = new VoicePipeline(localParticipantId, username, {
-      onStatusChange: (status) => {
-        onStatusChangeRef.current(status as AIStatus)
-      },
-      onTranscriptUpdate: (update: TranscriptUpdate) => {
-        onTranscriptRef.current?.(update.userId, update.username, update.text, update.isFinal)
-        if (update.isFinal) {
+    const pipeline = new VoicePipeline(
+      localParticipantId,
+      username,
+      {
+        onStatusChange: (status) => {
+          onStatusChangeRef.current(status as AIStatus)
+        },
+        onSTTStatus: (status) => {
+          onSTTStatusRef.current?.(status)
+        },
+        onTranscriptUpdate: (update: TranscriptUpdate) => {
+          onTranscriptRef.current?.(update.userId, update.username, update.text, update.isFinal)
+          if (update.isFinal) {
+            emitDebugRef.current({
+              transcripts: [
+                ...debugRef.current.transcripts.slice(-9),
+                update.text,
+              ],
+              lastTranscript: update.text,
+              partialTranscript: "",
+            })
+          } else {
+            emitDebugRef.current({ partialTranscript: update.text })
+          }
+        },
+        onDebug: (msg: string) => {
           emitDebugRef.current({
-            transcripts: [
-              ...debugRef.current.transcripts.slice(-9),
-              update.text,
-            ],
-            lastTranscript: update.text,
-            partialTranscript: "",
+            lastDecision: msg,
+            responseCount:
+              debugRef.current.responseCount +
+              (msg.startsWith("Speaking:") ? 1 : 0),
           })
-        } else {
-          emitDebugRef.current({ partialTranscript: update.text })
-        }
+        },
       },
-      onDebug: (msg: string) => {
-        emitDebugRef.current({
-          lastDecision: msg,
-          responseCount:
-            debugRef.current.responseCount +
-            (msg.startsWith("Speaking:") ? 1 : 0),
-        })
-      },
-    })
+      localStream ?? undefined
+    )
 
     pipeline.setRoomContext(roomId, aiParticipantId, aiName)
     pipelineRef.current = pipeline

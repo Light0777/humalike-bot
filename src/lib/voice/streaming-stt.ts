@@ -1,4 +1,5 @@
 import { ConversationStateManager } from "./conversation-state"
+import { VoiceActivityDetector } from "./voice-activity"
 
 declare global {
   interface Window {
@@ -51,7 +52,7 @@ export interface TranscriptUpdate {
 
 export type TranscriptCallback = (update: TranscriptUpdate) => void
 export type ErrorCallback = (error: string) => void
-export type StatusCallback = (status: "listening" | "idle" | "error") => void
+export type StatusCallback = (status: "listening" | "idle" | "error" | "no-mic") => void
 
 export class StreamingSTT {
   private recognition: SpeechRecognition | null = null
@@ -61,6 +62,11 @@ export class StreamingSTT {
   private username: string
   private isRunning = false
   private cleanup = false
+
+  private backoffDelay = 100
+  private readonly maxBackoffDelay = 10000
+  private vad: VoiceActivityDetector | null = null
+  private audioStream: MediaStream | null = null
 
   onTranscript: TranscriptCallback | null = null
   onError: ErrorCallback | null = null
@@ -74,11 +80,26 @@ export class StreamingSTT {
   constructor(
     stateManager: ConversationStateManager,
     userId: string,
-    username: string
+    username: string,
+    audioStream?: MediaStream
   ) {
     this.stateManager = stateManager
     this.userId = userId
     this.username = username
+    if (audioStream) {
+      this.setAudioStream(audioStream)
+    }
+  }
+
+  setAudioStream(stream: MediaStream) {
+    this.audioStream = stream
+    this.vad?.stop()
+    this.vad = new VoiceActivityDetector(10, 400)
+    this.vad.onVAD = (event) => {
+      if (event.speaking && !this.stateManager.hasActiveSpeaker()) {
+        this.stateManager.startSpeaking(this.userId, this.username)
+      }
+    }
   }
 
   get isAvailable(): boolean {
@@ -88,15 +109,21 @@ export class StreamingSTT {
   start() {
     if (!this.SpeechRecognitionAPI) {
       this.onError?.("SpeechRecognition not available")
+      this.onStatus?.("error")
       return
     }
 
     this.cleanup = false
+    this.resetBackoff()
+    if (this.vad && this.audioStream) {
+      this.vad.start(this.audioStream)
+    }
     this.startRecognition()
   }
 
   stop() {
     this.cleanup = true
+    this.vad?.stop()
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
       this.restartTimer = null
@@ -110,6 +137,25 @@ export class StreamingSTT {
     this.isRunning = false
   }
 
+  private resetBackoff() {
+    this.backoffDelay = 100
+  }
+
+  private getNextBackoff(): number {
+    const delay = this.backoffDelay
+    this.backoffDelay = Math.min(
+      Math.round(this.backoffDelay * 2.5),
+      this.maxBackoffDelay
+    )
+    return delay
+  }
+
+  private scheduleRestart() {
+    if (this.cleanup) return
+    const delay = this.getNextBackoff()
+    this.restartTimer = setTimeout(() => this.startRecognition(), delay)
+  }
+
   private startRecognition() {
     if (this.cleanup) return
 
@@ -121,6 +167,7 @@ export class StreamingSTT {
     this.recognition = recognition
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      this.resetBackoff()
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
         const text = result[0].transcript
@@ -148,12 +195,13 @@ export class StreamingSTT {
     }
 
     recognition.onerror = (event: { error: string }) => {
-      if (event.error !== "aborted" && event.error !== "no-speech") {
-        this.onError?.(event.error)
-      }
       if (event.error === "not-allowed") {
-        this.onStatus?.("error")
+        this.onStatus?.("no-mic")
         return
+      }
+      if (event.error !== "aborted") {
+        this.onError?.(event.error)
+        this.scheduleRestart()
       }
     }
 
@@ -161,7 +209,7 @@ export class StreamingSTT {
       this.isRunning = false
       this.recognition = null
       if (!this.cleanup) {
-        this.restartTimer = setTimeout(() => this.startRecognition(), 100)
+        this.scheduleRestart()
       }
     }
 
@@ -171,7 +219,7 @@ export class StreamingSTT {
       this.onStatus?.("listening")
     } catch (e) {
       this.onError?.(`STT start failed: ${e}`)
-      this.onStatus?.("error")
+      this.scheduleRestart()
     }
   }
 }

@@ -1,26 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
 import type { AIChatDebug } from "@/lib/ai/useAIChat"
 
 interface AIDebugProps {
   debug: AIChatDebug | null
-  onSimulate?: (text: string) => void
 }
 
-export function AIDebug({ debug, onSimulate }: AIDebugProps) {
-  const [input, setInput] = useState("")
-
-  // TEMP: expose simulation to browser console
-  useEffect(() => {
-    if (onSimulate) {
-      ;(window as any).simulateSTT = onSimulate
-    }
-    return () => {
-      delete (window as any).simulateSTT
-    }
-  }, [onSimulate])
-
+export function AIDebug({ debug }: AIDebugProps) {
   if (!debug) return null
 
   return (
@@ -69,37 +55,6 @@ export function AIDebug({ debug, onSimulate }: AIDebugProps) {
       <div className="text-xs font-mono text-[#888]">
         Responses: {debug.responseCount}
       </div>
-
-      {/* TEMP: STT simulator — remove before production */}
-      {onSimulate && (
-        <div className="border-t border-[#ebebeb] pt-2 flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && input.trim()) {
-                onSimulate(input.trim())
-                setInput("")
-              }
-            }}
-            placeholder="Simulate speech..."
-            className="flex-1 text-xs px-2 py-1 border border-[#ebebeb] rounded bg-transparent text-[#4d4d4d] outline-none focus:border-[#888]"
-          />
-          <button
-            onClick={() => {
-              if (input.trim()) {
-                onSimulate(input.trim())
-                setInput("")
-              }
-            }}
-            className="text-xs px-2 py-1 rounded bg-[#171717] text-white"
-          >
-            Send
-          </button>
-        </div>
-      )}
-      {/* TEMP end */}
     </div>
   )
 }

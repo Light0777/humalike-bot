@@ -9,6 +9,7 @@ export interface PipelineCallbacks {
   onStatusChange: (status: PipelineStatus) => void
   onTranscriptUpdate: (update: TranscriptUpdate) => void
   onDebug: (msg: string) => void
+  onSTTStatus?: (status: "listening" | "idle" | "error" | "no-mic") => void
 }
 
 export class VoicePipeline {
@@ -25,13 +26,18 @@ export class VoicePipeline {
   private aiParticipantId: string | null = null
   private aiName = "AI"
 
-  constructor(userId: string, username: string, callbacks: PipelineCallbacks) {
+  constructor(
+    userId: string,
+    username: string,
+    callbacks: PipelineCallbacks,
+    audioStream?: MediaStream
+  ) {
     this.userId = userId
     this.username = username
     this.callbacks = callbacks
 
     this.stateManager = new ConversationStateManager()
-    this.stt = new StreamingSTT(this.stateManager, userId, username)
+    this.stt = new StreamingSTT(this.stateManager, userId, username, audioStream)
     this.tts = new StreamingTTS()
 
     this.setupSTTCallbacks()
@@ -67,6 +73,7 @@ export class VoicePipeline {
     }
 
     this.stt.onStatus = (status) => {
+      this.callbacks.onSTTStatus?.(status)
       if (status === "listening") {
         this.callbacks.onStatusChange("listening")
       }
